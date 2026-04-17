@@ -90,6 +90,32 @@ Agenda:
 
 Para crear cita ahora debes enviar `hold_token` en `POST /api/v1/appointments/`.
 
+## Reglas de permisos en citas (actual)
+
+- CLIENT: solo puede cancelar sus propias citas (`status=CANCELLED`)
+- EMPLOYEE: puede editar campos no criticos (ej. notas/estado), no puede mover horario ni borrar
+- MANAGER / OWNER_ADMIN: control completo sobre citas del negocio
+
+## Mantenimiento de holds expirados
+
+Comando para limpiar holds vencidos:
+
+```bash
+python manage.py cleanup_expired_holds
+```
+
+Modo simulacion:
+
+```bash
+python manage.py cleanup_expired_holds --dry-run
+```
+
+Filtrar por negocio:
+
+```bash
+python manage.py cleanup_expired_holds --business-slug demo
+```
+
 ## Resolucion de tenant
 
 La API detecta tenant por:

@@ -6,6 +6,7 @@ from django.utils import timezone
 from rest_framework import permissions, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import APIException
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 
 from appointments.models import Appointment, SlotHold
@@ -27,18 +28,31 @@ class ConflictError(APIException):
 class AppointmentViewSet(viewsets.ModelViewSet):
 	permission_classes = [permissions.IsAuthenticated, IsTenantMember]
 
+	def _role_values(self):
+		return set(
+			self.request.user.tenant_memberships.filter(
+				business=self.request.tenant,
+				is_active=True,
+			).values_list("role", flat=True)
+		)
+
+	def _is_admin(self):
+		roles = self._role_values()
+		return "OWNER_ADMIN" in roles or "MANAGER" in roles
+
+	def _is_employee(self):
+		return "EMPLOYEE" in self._role_values()
+
+	def _is_client(self):
+		return "CLIENT" in self._role_values()
+
 	def get_queryset(self):
 		queryset = Appointment.objects.filter(business=self.request.tenant).select_related(
 			"client",
 			"employee",
 			"service",
 		)
-		role_values = set(
-			self.request.user.tenant_memberships.filter(
-				business=self.request.tenant,
-				is_active=True,
-			).values_list("role", flat=True)
-		)
+		role_values = self._role_values()
 		if "CLIENT" in role_values:
 			queryset = queryset.filter(client=self.request.user)
 		return queryset
@@ -92,6 +106,32 @@ class AppointmentViewSet(viewsets.ModelViewSet):
 				employee=locked_employee,
 			)
 			locked_hold.delete()
+
+	def perform_update(self, serializer):
+		if self._is_client():
+			allowed_fields = {"status"}
+			incoming_fields = set(self.request.data.keys())
+			if incoming_fields - allowed_fields:
+				raise PermissionDenied(
+					"Clients can only cancel their own appointments."
+				)
+			if self.request.data.get("status") != Appointment.Status.CANCELLED:
+				raise PermissionDenied(
+					"Clients can only set status to CANCELLED."
+				)
+		elif self._is_employee() and not self._is_admin():
+			restricted_fields = {"client", "employee", "service", "starts_at", "ends_at"}
+			if restricted_fields.intersection(set(self.request.data.keys())):
+				raise PermissionDenied(
+					"Employees cannot modify scheduling fields."
+				)
+
+		serializer.save()
+
+	def perform_destroy(self, instance):
+		if self._is_client() or (self._is_employee() and not self._is_admin()):
+			raise PermissionDenied("You are not allowed to delete appointments.")
+		instance.delete()
 
 	@action(detail=False, methods=["post"], url_path="holds")
 	def create_hold(self, request):
