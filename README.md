@@ -77,7 +77,18 @@ Catalogo:
 
 Agenda:
 - Appointments CRUD: `/api/v1/appointments/`
+- Create slot hold: `POST /api/v1/appointments/holds/`
 - Availability basica: `GET /api/v1/appointments/availability/?date=YYYY-MM-DD&employee_id=<id>&duration=30`
+
+## Flujo de reserva transaccional (actual)
+
+1. Cliente solicita hold temporal (5 minutos)
+2. Backend crea token de hold para el slot
+3. Cliente confirma cita con `hold_token`
+4. Backend valida token vigente y crea cita dentro de transaccion con lock
+5. Si hay conflicto, responde `409 Conflict`
+
+Para crear cita ahora debes enviar `hold_token` en `POST /api/v1/appointments/`.
 
 ## Resolucion de tenant
 
