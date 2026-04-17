@@ -116,6 +116,29 @@ Filtrar por negocio:
 python manage.py cleanup_expired_holds --business-slug demo
 ```
 
+## Notificaciones asincronas (email + adapter WhatsApp)
+
+El sistema agenda y despacha notificaciones con modelo `Notification`.
+
+Eventos soportados:
+
+- `BOOKING_CREATED`
+- `APPOINTMENT_CONFIRMED`
+- `REMINDER_24H`
+- `REMINDER_1H`
+
+Comandos operativos:
+
+```bash
+python manage.py schedule_appointment_notifications --lookahead-hours 48
+python manage.py dispatch_due_notifications --limit 100 --max-retries 3
+```
+
+Notas:
+
+- Email usa backend de Django (por defecto `console.EmailBackend` en local)
+- WhatsApp queda preparado como adaptador para integración futura con proveedor
+
 ## Resolucion de tenant
 
 La API detecta tenant por:
@@ -125,7 +148,7 @@ La API detecta tenant por:
 
 ## Siguiente fase recomendada
 
-- Reserva transaccional con hold token real + expiracion
-- Locks a nivel DB para anti doble-reserva dura
-- Notificaciones asincronas con Celery (email/WhatsApp)
-- Dashboard y reportes por negocio
+- Integrar Celery Beat para ejecutar scheduling/dispatch por cron interno
+- Implementar provider real para WhatsApp Business API
+- Agregar outbox pattern para robustez de entrega
+- Exponer auditoria de notificaciones por tenant en panel admin

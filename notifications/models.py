@@ -9,6 +9,12 @@ class Notification(TimeStampedModel):
 		EMAIL = "EMAIL", "Email"
 		WHATSAPP = "WHATSAPP", "WhatsApp"
 
+	class EventType(models.TextChoices):
+		BOOKING_CREATED = "BOOKING_CREATED", "Booking Created"
+		APPOINTMENT_CONFIRMED = "APPOINTMENT_CONFIRMED", "Appointment Confirmed"
+		REMINDER_24H = "REMINDER_24H", "Reminder 24h"
+		REMINDER_1H = "REMINDER_1H", "Reminder 1h"
+
 	class Status(models.TextChoices):
 		PENDING = "PENDING", "Pending"
 		SENT = "SENT", "Sent"
@@ -22,8 +28,19 @@ class Notification(TimeStampedModel):
 	)
 	channel = models.CharField(max_length=16, choices=Channel.choices)
 	status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
+	event_type = models.CharField(max_length=32, choices=EventType.choices)
 	scheduled_for = models.DateTimeField()
 	sent_at = models.DateTimeField(null=True, blank=True)
 	payload = models.JSONField(default=dict, blank=True)
+	retry_count = models.PositiveSmallIntegerField(default=0)
+	error_message = models.TextField(blank=True)
+
+	class Meta:
+		constraints = [
+			models.UniqueConstraint(
+				fields=["appointment", "channel", "event_type"],
+				name="uq_notification_appointment_channel_event",
+			)
+		]
 
 # Create your models here.

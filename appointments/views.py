@@ -15,6 +15,10 @@ from appointments.serializers import (
 	AppointmentSerializer,
 	SlotHoldSerializer,
 )
+from notifications.services import (
+	schedule_booking_notifications,
+	schedule_confirmation_and_reminders,
+)
 from staffs.models import Employee
 from tenants.permissions import IsTenantMember
 
@@ -107,7 +111,13 @@ class AppointmentViewSet(viewsets.ModelViewSet):
 			)
 			locked_hold.delete()
 
+		appointment = serializer.instance
+		schedule_booking_notifications(appointment)
+		if appointment.status == Appointment.Status.CONFIRMED:
+			schedule_confirmation_and_reminders(appointment)
+
 	def perform_update(self, serializer):
+		previous_status = serializer.instance.status
 		if self._is_client():
 			allowed_fields = {"status"}
 			incoming_fields = set(self.request.data.keys())
@@ -127,6 +137,12 @@ class AppointmentViewSet(viewsets.ModelViewSet):
 				)
 
 		serializer.save()
+		updated = serializer.instance
+		if (
+			previous_status != Appointment.Status.CONFIRMED
+			and updated.status == Appointment.Status.CONFIRMED
+		):
+			schedule_confirmation_and_reminders(updated)
 
 	def perform_destroy(self, instance):
 		if self._is_client() or (self._is_employee() and not self._is_admin()):
