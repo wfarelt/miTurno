@@ -6,7 +6,16 @@ from notifications.models import Notification, NotificationOutbox
 class NotificationOutboxSerializer(serializers.ModelSerializer):
     class Meta:
         model = NotificationOutbox
-        fields = ("status", "attempts", "next_attempt_at", "last_error")
+        fields = (
+            "status",
+            "attempts",
+            "next_attempt_at",
+            "delivered_at",
+            "last_error",
+            "provider_message_id",
+            "provider_status",
+            "provider_payload",
+        )
 
 
 class NotificationAuditSerializer(serializers.ModelSerializer):

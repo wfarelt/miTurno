@@ -145,6 +145,14 @@ Auditoria por API:
 - `GET /api/v1/notifications/` (solo MANAGER / OWNER_ADMIN)
 - Filtros: `status`, `channel`, `event_type`
 
+Webhook WhatsApp (Meta):
+
+- Verificacion: `GET /api/v1/notifications/webhooks/whatsapp/`
+	- Query params: `hub.mode`, `hub.verify_token`, `hub.challenge`
+- Eventos: `POST /api/v1/notifications/webhooks/whatsapp/`
+	- Reconciliacion por `provider_message_id` en outbox
+	- Estados soportados: `sent`, `delivered`, `read`, `failed`, `undelivered`
+
 ## Celery Beat (siguiente paso aplicado)
 
 Tareas periodicas configuradas:
@@ -174,6 +182,6 @@ La API detecta tenant por:
 
 ## Siguiente fase recomendada
 
-- Webhooks de entrega WhatsApp para reconciliar estados reales de proveedor
 - Dashboard admin con metricas de entrega por canal/evento
 - Politicas de reintento por tipo de error (4xx vs 5xx)
+- Circuit breaker por proveedor externo (degradacion controlada)

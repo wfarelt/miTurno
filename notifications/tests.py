@@ -196,3 +196,104 @@ class NotificationAuditApiTests(APITestCase):
 		response = self.client.get(url, HTTP_X_BUSINESS_SLUG=self.business.slug)
 
 		self.assertEqual(response.status_code, 403)
+
+
+@override_settings(
+	WHATSAPP_WEBHOOK_VERIFY_TOKEN="verify-secret",
+	WHATSAPP_APP_SECRET="app-secret",
+)
+class WhatsAppWebhookTests(APITestCase):
+	def setUp(self):
+		user_model = get_user_model()
+		business = Business.objects.create(name="Webhook Salon", slug="webhook-salon")
+		client_user = user_model.objects.create_user(
+			email="webhook-client@example.com",
+			username="webhook-client",
+			password="testpass123",
+			phone="573001112233",
+		)
+		TenantMembership.objects.create(
+			user=client_user,
+			business=business,
+			role=TenantMembership.Role.CLIENT,
+		)
+		employee = Employee.objects.create(
+			business=business,
+			first_name="Nina",
+			last_name="Barber",
+		)
+		service = Service.objects.create(
+			business=business,
+			name="Fade",
+			duration_minutes=30,
+			price="30.00",
+		)
+		appointment = Appointment.objects.create(
+			business=business,
+			client=client_user,
+			employee=employee,
+			service=service,
+			starts_at=timezone.now() + timedelta(days=1),
+			ends_at=timezone.now() + timedelta(days=1, minutes=30),
+			status=Appointment.Status.CONFIRMED,
+		)
+		notification = Notification.objects.create(
+			business=business,
+			appointment=appointment,
+			channel=Notification.Channel.WHATSAPP,
+			event_type=Notification.EventType.APPOINTMENT_CONFIRMED,
+			scheduled_for=timezone.now(),
+			status=Notification.Status.SENT,
+		)
+		self.outbox = NotificationOutbox.objects.create(
+			business=business,
+			notification=notification,
+			status=NotificationOutbox.Status.PROCESSING,
+			next_attempt_at=timezone.now(),
+			provider_message_id="wamid.HBgLMjM0NTY3ODkwABEA",
+		)
+
+	def test_webhook_verification_success(self):
+		url = reverse("whatsapp-webhook")
+		response = self.client.get(
+			url,
+			{
+				"hub.mode": "subscribe",
+				"hub.verify_token": "verify-secret",
+				"hub.challenge": "12345",
+			},
+		)
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(response.content.decode("utf-8"), "12345")
+
+	@override_settings(WHATSAPP_APP_SECRET="")
+	def test_webhook_post_updates_outbox_status(self):
+		url = reverse("whatsapp-webhook")
+		payload = {
+			"entry": [
+				{
+					"changes": [
+						{
+							"value": {
+								"statuses": [
+									{
+										"id": "wamid.HBgLMjM0NTY3ODkwABEA",
+										"status": "delivered",
+									}
+								]
+							}
+						}
+					]
+				}
+			]
+		}
+		response = self.client.post(
+			url,
+			data=payload,
+			format="json",
+		)
+		self.assertEqual(response.status_code, 200)
+
+		self.outbox.refresh_from_db()
+		self.assertEqual(self.outbox.status, NotificationOutbox.Status.DELIVERED)
+		self.assertEqual(self.outbox.provider_status, "delivered")

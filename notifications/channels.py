@@ -9,6 +9,8 @@ from django.core.mail import send_mail
 class ChannelResult:
     ok: bool
     error: str = ""
+    external_message_id: str = ""
+    raw_response: dict | None = None
 
 
 class EmailChannel:
@@ -76,4 +78,20 @@ class WhatsAppChannel:
                 ok=False,
                 error=f"WhatsApp API error ({response.status_code}): {response.text[:300]}",
             )
-        return ChannelResult(ok=True)
+
+        response_json = {}
+        try:
+            response_json = response.json()
+        except ValueError:
+            response_json = {}
+
+        message_id = ""
+        messages = response_json.get("messages", [])
+        if messages and isinstance(messages, list):
+            message_id = str(messages[0].get("id", ""))
+
+        return ChannelResult(
+            ok=True,
+            external_message_id=message_id,
+            raw_response=response_json,
+        )

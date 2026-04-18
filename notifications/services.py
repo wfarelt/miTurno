@@ -174,7 +174,14 @@ def dispatch_due_notifications(limit: int = 100, max_retries: int = 3):
             fresh_outbox.attempts += 1
             fresh_outbox.locked_at = timezone.now()
             if result.ok:
-                fresh_outbox.status = NotificationOutbox.Status.DELIVERED
+                if notification.channel == Notification.Channel.WHATSAPP:
+                    fresh_outbox.status = NotificationOutbox.Status.PROCESSING
+                    fresh_outbox.provider_message_id = result.external_message_id or None
+                    fresh_outbox.provider_payload = result.raw_response or {}
+                    fresh_outbox.provider_status = "accepted"
+                else:
+                    fresh_outbox.status = NotificationOutbox.Status.DELIVERED
+                    fresh_outbox.delivered_at = timezone.now()
                 fresh_outbox.last_error = ""
 
                 fresh_notification.status = Notification.Status.SENT
@@ -202,7 +209,11 @@ def dispatch_due_notifications(limit: int = 100, max_retries: int = 3):
                     "attempts",
                     "next_attempt_at",
                     "locked_at",
+                    "delivered_at",
                     "last_error",
+                    "provider_message_id",
+                    "provider_status",
+                    "provider_payload",
                     "updated_at",
                 ]
             )
@@ -217,3 +228,69 @@ def dispatch_due_notifications(limit: int = 100, max_retries: int = 3):
             )
 
     return {"sent": sent, "failed": failed, "processed": sent + failed}
+
+
+def process_whatsapp_webhook(payload: dict):
+    statuses = []
+    for entry in payload.get("entry", []):
+        for change in entry.get("changes", []):
+            value = change.get("value", {})
+            statuses.extend(value.get("statuses", []))
+
+    updated = 0
+    ignored = 0
+    for status_event in statuses:
+        message_id = str(status_event.get("id", "")).strip()
+        status_value = str(status_event.get("status", "")).strip().lower()
+        if not message_id:
+            ignored += 1
+            continue
+
+        outbox = NotificationOutbox.objects.select_related("notification").filter(
+            provider_message_id=message_id,
+            notification__channel=Notification.Channel.WHATSAPP,
+        ).first()
+        if outbox is None:
+            ignored += 1
+            continue
+
+        with transaction.atomic():
+            fresh_outbox = NotificationOutbox.objects.select_for_update().get(pk=outbox.pk)
+            fresh_notification = Notification.objects.select_for_update().get(
+                pk=fresh_outbox.notification_id
+            )
+
+            fresh_outbox.provider_status = status_value
+            fresh_outbox.provider_payload = status_event
+
+            if status_value in {"sent", "accepted"}:
+                fresh_outbox.status = NotificationOutbox.Status.PROCESSING
+            elif status_value in {"delivered", "read"}:
+                fresh_outbox.status = NotificationOutbox.Status.DELIVERED
+                fresh_outbox.delivered_at = timezone.now()
+            elif status_value in {"failed", "undelivered"}:
+                errors = status_event.get("errors", [])
+                error_message = "WhatsApp delivery failed."
+                if errors and isinstance(errors, list):
+                    first = errors[0]
+                    error_message = str(first.get("title") or first.get("message") or error_message)
+                fresh_outbox.status = NotificationOutbox.Status.FAILED
+                fresh_outbox.last_error = error_message
+
+                fresh_notification.status = Notification.Status.FAILED
+                fresh_notification.error_message = error_message
+                fresh_notification.save(update_fields=["status", "error_message", "updated_at"])
+
+            fresh_outbox.save(
+                update_fields=[
+                    "status",
+                    "delivered_at",
+                    "last_error",
+                    "provider_status",
+                    "provider_payload",
+                    "updated_at",
+                ]
+            )
+            updated += 1
+
+    return {"updated": updated, "ignored": ignored, "events": len(statuses)}

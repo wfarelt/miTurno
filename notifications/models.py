@@ -61,7 +61,11 @@ class NotificationOutbox(TimeStampedModel):
 	attempts = models.PositiveSmallIntegerField(default=0)
 	next_attempt_at = models.DateTimeField()
 	locked_at = models.DateTimeField(null=True, blank=True)
+	delivered_at = models.DateTimeField(null=True, blank=True)
 	last_error = models.TextField(blank=True)
+	provider_message_id = models.CharField(max_length=128, unique=True, null=True, blank=True)
+	provider_status = models.CharField(max_length=64, blank=True)
+	provider_payload = models.JSONField(default=dict, blank=True)
 
 	class Meta:
 		indexes = [
