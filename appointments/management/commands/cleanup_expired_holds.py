@@ -1,7 +1,5 @@
 from django.core.management.base import BaseCommand
-from django.utils import timezone
-
-from appointments.models import SlotHold
+from appointments.tasks import cleanup_expired_holds_task
 
 
 class Command(BaseCommand):
@@ -21,15 +19,14 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
-        queryset = SlotHold.objects.filter(expires_at__lte=timezone.now())
         business_slug = options.get("business_slug")
-        if business_slug:
-            queryset = queryset.filter(business__slug=business_slug)
-
-        count = queryset.count()
         if options.get("dry_run"):
+            count = cleanup_expired_holds_task(
+                business_slug=business_slug,
+                dry_run=True,
+            )
             self.stdout.write(self.style.WARNING(f"Dry run: {count} expired holds found."))
             return
 
-        deleted, _ = queryset.delete()
+        deleted = cleanup_expired_holds_task(business_slug=business_slug)
         self.stdout.write(self.style.SUCCESS(f"Deleted {deleted} expired holds."))

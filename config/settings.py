@@ -158,6 +158,7 @@ JWT_ACCESS_MINUTES = config("JWT_ACCESS_MINUTES", cast=int, default=15)
 JWT_REFRESH_DAYS = config("JWT_REFRESH_DAYS", cast=int, default=7)
 
 from datetime import timedelta
+from celery.schedules import crontab
 
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=JWT_ACCESS_MINUTES),
@@ -177,3 +178,31 @@ WHATSAPP_PROVIDER_ENABLED = config(
     cast=bool,
     default=False,
 )
+
+CELERY_BROKER_URL = config("CELERY_BROKER_URL", default="redis://localhost:6379/0")
+CELERY_RESULT_BACKEND = config(
+    "CELERY_RESULT_BACKEND",
+    default="redis://localhost:6379/1",
+)
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
+CELERY_TIMEZONE = TIME_ZONE
+CELERY_ENABLE_UTC = True
+
+CELERY_BEAT_SCHEDULE = {
+    "schedule-appointment-reminders": {
+        "task": "notifications.tasks.schedule_appointment_notifications_task",
+        "schedule": crontab(minute="*/15"),
+        "args": [48],
+    },
+    "dispatch-due-notifications": {
+        "task": "notifications.tasks.dispatch_due_notifications_task",
+        "schedule": crontab(minute="*/1"),
+        "args": [100, 3],
+    },
+    "cleanup-expired-holds": {
+        "task": "appointments.tasks.cleanup_expired_holds_task",
+        "schedule": crontab(minute="*/10"),
+    },
+}

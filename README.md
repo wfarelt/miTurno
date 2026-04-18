@@ -139,6 +139,26 @@ Notas:
 - Email usa backend de Django (por defecto `console.EmailBackend` en local)
 - WhatsApp queda preparado como adaptador para integración futura con proveedor
 
+## Celery Beat (siguiente paso aplicado)
+
+Tareas periodicas configuradas:
+
+- `notifications.tasks.schedule_appointment_notifications_task` cada 15 minutos
+- `notifications.tasks.dispatch_due_notifications_task` cada 1 minuto
+- `appointments.tasks.cleanup_expired_holds_task` cada 10 minutos
+
+Ejecucion local (terminales separadas):
+
+```bash
+celery -A config worker -l info
+celery -A config beat -l info
+```
+
+Broker/backend por defecto (configurable):
+
+- `CELERY_BROKER_URL=redis://localhost:6379/0`
+- `CELERY_RESULT_BACKEND=redis://localhost:6379/1`
+
 ## Resolucion de tenant
 
 La API detecta tenant por:
@@ -148,7 +168,6 @@ La API detecta tenant por:
 
 ## Siguiente fase recomendada
 
-- Integrar Celery Beat para ejecutar scheduling/dispatch por cron interno
 - Implementar provider real para WhatsApp Business API
 - Agregar outbox pattern para robustez de entrega
 - Exponer auditoria de notificaciones por tenant en panel admin
