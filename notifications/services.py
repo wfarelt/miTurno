@@ -1,10 +1,11 @@
 from datetime import timedelta
 
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
 from notifications.channels import EmailChannel, WhatsAppChannel
-from notifications.models import Notification
+from notifications.models import Notification, NotificationOutbox
 
 
 def _event_message(event_type: str, appointment):
@@ -32,6 +33,19 @@ def _event_message(event_type: str, appointment):
     )
 
 
+def _configured_channels(appointment):
+    raw_channels = getattr(settings, "NOTIFICATION_CHANNELS", [Notification.Channel.EMAIL])
+    channels = []
+    for channel in raw_channels:
+        if channel == Notification.Channel.WHATSAPP and not appointment.client.phone:
+            continue
+        channels.append(channel)
+
+    if not channels:
+        channels = [Notification.Channel.EMAIL]
+    return channels
+
+
 def schedule_notification(appointment, channel: str, event_type: str, scheduled_for):
     now = timezone.now()
     if scheduled_for < now:
@@ -51,38 +65,47 @@ def schedule_notification(appointment, channel: str, event_type: str, scheduled_
             },
         },
     )
+    NotificationOutbox.objects.get_or_create(
+        notification=notification,
+        defaults={
+            "business": appointment.business,
+            "next_attempt_at": scheduled_for,
+        },
+    )
     return notification
 
 
 def schedule_booking_notifications(appointment):
-    schedule_notification(
-        appointment=appointment,
-        channel=Notification.Channel.EMAIL,
-        event_type=Notification.EventType.BOOKING_CREATED,
-        scheduled_for=timezone.now(),
-    )
+    for channel in _configured_channels(appointment):
+        schedule_notification(
+            appointment=appointment,
+            channel=channel,
+            event_type=Notification.EventType.BOOKING_CREATED,
+            scheduled_for=timezone.now(),
+        )
 
 
 def schedule_confirmation_and_reminders(appointment):
     start = appointment.starts_at
-    schedule_notification(
-        appointment=appointment,
-        channel=Notification.Channel.EMAIL,
-        event_type=Notification.EventType.APPOINTMENT_CONFIRMED,
-        scheduled_for=timezone.now(),
-    )
-    schedule_notification(
-        appointment=appointment,
-        channel=Notification.Channel.EMAIL,
-        event_type=Notification.EventType.REMINDER_24H,
-        scheduled_for=start - timedelta(hours=24),
-    )
-    schedule_notification(
-        appointment=appointment,
-        channel=Notification.Channel.EMAIL,
-        event_type=Notification.EventType.REMINDER_1H,
-        scheduled_for=start - timedelta(hours=1),
-    )
+    for channel in _configured_channels(appointment):
+        schedule_notification(
+            appointment=appointment,
+            channel=channel,
+            event_type=Notification.EventType.APPOINTMENT_CONFIRMED,
+            scheduled_for=timezone.now(),
+        )
+        schedule_notification(
+            appointment=appointment,
+            channel=channel,
+            event_type=Notification.EventType.REMINDER_24H,
+            scheduled_for=start - timedelta(hours=24),
+        )
+        schedule_notification(
+            appointment=appointment,
+            channel=channel,
+            event_type=Notification.EventType.REMINDER_1H,
+            scheduled_for=start - timedelta(hours=1),
+        )
 
 
 def backfill_confirmed_reminders(lookahead_hours: int = 48):
@@ -107,13 +130,17 @@ def backfill_confirmed_reminders(lookahead_hours: int = 48):
 def dispatch_due_notifications(limit: int = 100, max_retries: int = 3):
     now = timezone.now()
     queryset = (
-        Notification.objects.select_related("appointment", "appointment__client")
-        .filter(
-            status=Notification.Status.PENDING,
-            scheduled_for__lte=now,
-            retry_count__lt=max_retries,
+        NotificationOutbox.objects.select_related(
+            "notification",
+            "notification__appointment",
+            "notification__appointment__client",
         )
-        .order_by("scheduled_for")[:limit]
+        .filter(
+            status__in=[NotificationOutbox.Status.PENDING, NotificationOutbox.Status.FAILED],
+            next_attempt_at__lte=now,
+            attempts__lt=max_retries,
+        )
+        .order_by("next_attempt_at")[:limit]
     )
 
     email_channel = EmailChannel()
@@ -121,7 +148,8 @@ def dispatch_due_notifications(limit: int = 100, max_retries: int = 3):
 
     sent = 0
     failed = 0
-    for notification in queryset:
+    for outbox in queryset:
+        notification = outbox.notification
         appointment = notification.appointment
         payload = notification.payload or {}
         subject = payload.get("subject", "CitaPro")
@@ -140,19 +168,45 @@ def dispatch_due_notifications(limit: int = 100, max_retries: int = 3):
             )
 
         with transaction.atomic():
-            fresh = Notification.objects.select_for_update().get(pk=notification.pk)
+            fresh_outbox = NotificationOutbox.objects.select_for_update().get(pk=outbox.pk)
+            fresh_notification = Notification.objects.select_for_update().get(pk=notification.pk)
+
+            fresh_outbox.attempts += 1
+            fresh_outbox.locked_at = timezone.now()
             if result.ok:
-                fresh.status = Notification.Status.SENT
-                fresh.sent_at = timezone.now()
-                fresh.error_message = ""
+                fresh_outbox.status = NotificationOutbox.Status.DELIVERED
+                fresh_outbox.last_error = ""
+
+                fresh_notification.status = Notification.Status.SENT
+                fresh_notification.sent_at = timezone.now()
+                fresh_notification.error_message = ""
                 sent += 1
             else:
-                fresh.retry_count += 1
-                fresh.error_message = result.error
-                if fresh.retry_count >= max_retries:
-                    fresh.status = Notification.Status.FAILED
+                fresh_outbox.last_error = result.error
+                if fresh_outbox.attempts >= max_retries:
+                    fresh_outbox.status = NotificationOutbox.Status.FAILED
+                else:
+                    # Exponential backoff in minutes: 2, 4, 8...
+                    backoff_minutes = 2 ** fresh_outbox.attempts
+                    fresh_outbox.next_attempt_at = timezone.now() + timedelta(minutes=backoff_minutes)
+
+                fresh_notification.retry_count = fresh_outbox.attempts
+                fresh_notification.error_message = result.error
+                if fresh_outbox.status == NotificationOutbox.Status.FAILED:
+                    fresh_notification.status = Notification.Status.FAILED
                 failed += 1
-            fresh.save(
+
+            fresh_outbox.save(
+                update_fields=[
+                    "status",
+                    "attempts",
+                    "next_attempt_at",
+                    "locked_at",
+                    "last_error",
+                    "updated_at",
+                ]
+            )
+            fresh_notification.save(
                 update_fields=[
                     "status",
                     "sent_at",

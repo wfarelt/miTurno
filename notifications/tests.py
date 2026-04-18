@@ -3,10 +3,12 @@ from datetime import timedelta
 from django.contrib.auth import get_user_model
 from django.core import mail
 from django.test import TestCase, override_settings
+from django.urls import reverse
 from django.utils import timezone
+from rest_framework.test import APITestCase
 
 from appointments.models import Appointment
-from notifications.models import Notification
+from notifications.models import Notification, NotificationOutbox
 from notifications.services import (
 	dispatch_due_notifications,
 	schedule_booking_notifications,
@@ -17,7 +19,10 @@ from staffs.models import Employee
 from tenants.models import Business, TenantMembership
 
 
-@override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
+@override_settings(
+	EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+	NOTIFICATION_CHANNELS=[Notification.Channel.EMAIL],
+)
 class NotificationFlowTests(TestCase):
 	def setUp(self):
 		user_model = get_user_model()
@@ -61,11 +66,15 @@ class NotificationFlowTests(TestCase):
 		appointment = self._appointment(status=Appointment.Status.PENDING)
 		schedule_booking_notifications(appointment)
 
+		notification = Notification.objects.get(
+			appointment=appointment,
+			channel=Notification.Channel.EMAIL,
+			event_type=Notification.EventType.BOOKING_CREATED,
+		)
 		self.assertTrue(
-			Notification.objects.filter(
-				appointment=appointment,
-				channel=Notification.Channel.EMAIL,
-				event_type=Notification.EventType.BOOKING_CREATED,
+			NotificationOutbox.objects.filter(
+				notification=notification,
+				status=NotificationOutbox.Status.PENDING,
 			).exists()
 		)
 
@@ -97,10 +106,93 @@ class NotificationFlowTests(TestCase):
 			scheduled_for=timezone.now() - timedelta(minutes=1),
 			payload={"subject": "Test", "body": "Body"},
 		)
+		NotificationOutbox.objects.create(
+			business=self.business,
+			notification=notification,
+			next_attempt_at=timezone.now() - timedelta(minutes=1),
+		)
 
 		result = dispatch_due_notifications(limit=10)
 		notification.refresh_from_db()
+		outbox = notification.outbox_entry
+		outbox.refresh_from_db()
 
 		self.assertEqual(result["sent"], 1)
 		self.assertEqual(notification.status, Notification.Status.SENT)
+		self.assertEqual(outbox.status, NotificationOutbox.Status.DELIVERED)
 		self.assertEqual(len(mail.outbox), 1)
+
+
+class NotificationAuditApiTests(APITestCase):
+	def setUp(self):
+		user_model = get_user_model()
+		self.business = Business.objects.create(name="Demo Salon", slug="audit-salon")
+		self.manager_user = user_model.objects.create_user(
+			email="manager-audit@example.com",
+			username="manager-audit",
+			password="testpass123",
+		)
+		self.client_user = user_model.objects.create_user(
+			email="client-audit@example.com",
+			username="client-audit",
+			password="testpass123",
+		)
+		TenantMembership.objects.create(
+			user=self.manager_user,
+			business=self.business,
+			role=TenantMembership.Role.MANAGER,
+		)
+		TenantMembership.objects.create(
+			user=self.client_user,
+			business=self.business,
+			role=TenantMembership.Role.CLIENT,
+		)
+
+		employee = Employee.objects.create(
+			business=self.business,
+			first_name="Mia",
+			last_name="Stylist",
+		)
+		service = Service.objects.create(
+			business=self.business,
+			name="Color",
+			duration_minutes=60,
+			price="55.00",
+		)
+		appointment = Appointment.objects.create(
+			business=self.business,
+			client=self.client_user,
+			employee=employee,
+			service=service,
+			starts_at=timezone.now() + timedelta(days=1),
+			ends_at=timezone.now() + timedelta(days=1, hours=1),
+			status=Appointment.Status.CONFIRMED,
+		)
+		self.notification = Notification.objects.create(
+			business=self.business,
+			appointment=appointment,
+			channel=Notification.Channel.EMAIL,
+			event_type=Notification.EventType.APPOINTMENT_CONFIRMED,
+			scheduled_for=timezone.now(),
+			status=Notification.Status.PENDING,
+		)
+		NotificationOutbox.objects.create(
+			business=self.business,
+			notification=self.notification,
+			next_attempt_at=timezone.now(),
+		)
+
+	def test_manager_can_list_notification_audit(self):
+		self.client.force_authenticate(self.manager_user)
+		url = reverse("notification-audit-list")
+		response = self.client.get(url, HTTP_X_BUSINESS_SLUG=self.business.slug)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(len(response.data), 1)
+
+	def test_client_cannot_list_notification_audit(self):
+		self.client.force_authenticate(self.client_user)
+		url = reverse("notification-audit-list")
+		response = self.client.get(url, HTTP_X_BUSINESS_SLUG=self.business.slug)
+
+		self.assertEqual(response.status_code, 403)

@@ -43,4 +43,29 @@ class Notification(TimeStampedModel):
 			)
 		]
 
+
+class NotificationOutbox(TimeStampedModel):
+	class Status(models.TextChoices):
+		PENDING = "PENDING", "Pending"
+		PROCESSING = "PROCESSING", "Processing"
+		DELIVERED = "DELIVERED", "Delivered"
+		FAILED = "FAILED", "Failed"
+
+	business = models.ForeignKey(Business, on_delete=models.CASCADE, related_name="notification_outbox")
+	notification = models.OneToOneField(
+		Notification,
+		on_delete=models.CASCADE,
+		related_name="outbox_entry",
+	)
+	status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
+	attempts = models.PositiveSmallIntegerField(default=0)
+	next_attempt_at = models.DateTimeField()
+	locked_at = models.DateTimeField(null=True, blank=True)
+	last_error = models.TextField(blank=True)
+
+	class Meta:
+		indexes = [
+			models.Index(fields=["status", "next_attempt_at"]),
+		]
+
 # Create your models here.

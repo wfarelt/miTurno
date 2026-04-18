@@ -137,7 +137,13 @@ python manage.py dispatch_due_notifications --limit 100 --max-retries 3
 Notas:
 
 - Email usa backend de Django (por defecto `console.EmailBackend` en local)
-- WhatsApp queda preparado como adaptador para integración futura con proveedor
+- WhatsApp integrado via Meta Cloud API (configurado por variables de entorno)
+- Entrega robusta con patron outbox (`NotificationOutbox`) y reintentos con backoff
+
+Auditoria por API:
+
+- `GET /api/v1/notifications/` (solo MANAGER / OWNER_ADMIN)
+- Filtros: `status`, `channel`, `event_type`
 
 ## Celery Beat (siguiente paso aplicado)
 
@@ -168,6 +174,6 @@ La API detecta tenant por:
 
 ## Siguiente fase recomendada
 
-- Implementar provider real para WhatsApp Business API
-- Agregar outbox pattern para robustez de entrega
-- Exponer auditoria de notificaciones por tenant en panel admin
+- Webhooks de entrega WhatsApp para reconciliar estados reales de proveedor
+- Dashboard admin con metricas de entrega por canal/evento
+- Politicas de reintento por tipo de error (4xx vs 5xx)

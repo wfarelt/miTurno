@@ -178,6 +178,18 @@ WHATSAPP_PROVIDER_ENABLED = config(
     cast=bool,
     default=False,
 )
+WHATSAPP_API_URL = config(
+    "WHATSAPP_API_URL",
+    default="https://graph.facebook.com/v22.0",
+)
+WHATSAPP_PHONE_NUMBER_ID = config("WHATSAPP_PHONE_NUMBER_ID", default="")
+WHATSAPP_ACCESS_TOKEN = config("WHATSAPP_ACCESS_TOKEN", default="")
+
+NOTIFICATION_CHANNELS = config(
+    "NOTIFICATION_CHANNELS",
+    cast=Csv(),
+    default="EMAIL",
+)
 
 CELERY_BROKER_URL = config("CELERY_BROKER_URL", default="redis://localhost:6379/0")
 CELERY_RESULT_BACKEND = config(
