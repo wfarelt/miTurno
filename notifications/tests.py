@@ -457,12 +457,19 @@ class WhatsAppCircuitBreakerTests(TestCase):
 @override_settings(TELEGRAM_WEBHOOK_SECRET_TOKEN="telegram-secret")
 class TelegramWebhookTests(APITestCase):
 	def setUp(self):
+		self.user_model = get_user_model()
 		self.business = Business.objects.create(name="Telegram Salon", slug="telegram-salon")
 		self.employee = Employee.objects.create(
 			business=self.business,
 			first_name="Tina",
 			last_name="Stylist",
 			telegram_username="barber_tina",
+		)
+		self.service = Service.objects.create(
+			business=self.business,
+			name="Corte clasico",
+			duration_minutes=30,
+			price="25.00",
 		)
 
 	def test_webhook_updates_employee_chat_id(self):
@@ -506,3 +513,187 @@ class TelegramWebhookTests(APITestCase):
 			HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN="wrong",
 		)
 		self.assertEqual(response.status_code, 403)
+
+	@override_settings(TELEGRAM_PROVIDER_ENABLED=True, TELEGRAM_BOT_TOKEN="telegram-token")
+	@patch("notifications.channels.requests.post")
+	def test_webhook_replies_to_citas_command_with_upcoming_appointments(self, post_mock):
+		post_response = post_mock.return_value
+		post_response.status_code = 200
+		post_response.json.return_value = {"ok": True, "result": {"message_id": 321}}
+
+		client_user = self.user_model.objects.create_user(
+			email="client-telegram@example.com",
+			username="client-telegram",
+			password="testpass123",
+		)
+		TenantMembership.objects.create(
+			user=client_user,
+			business=self.business,
+			role=TenantMembership.Role.CLIENT,
+		)
+		starts_at = timezone.now() + timedelta(hours=2)
+		Appointment.objects.create(
+			business=self.business,
+			client=client_user,
+			employee=self.employee,
+			service=self.service,
+			starts_at=starts_at,
+			ends_at=starts_at + timedelta(minutes=30),
+			status=Appointment.Status.CONFIRMED,
+		)
+
+		url = reverse("telegram-webhook")
+		payload = {
+			"update_id": 200002,
+			"message": {
+				"message_id": 8,
+				"from": {
+					"id": 555,
+					"is_bot": False,
+					"username": "barber_tina",
+				},
+				"chat": {
+					"id": 99887766,
+					"type": "private",
+				},
+				"date": 1713600000,
+				"text": "/citas",
+			},
+		}
+
+		response = self.client.post(
+			url,
+			data=payload,
+			format="json",
+			HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN="telegram-secret",
+		)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(response.data["command_replies"], 1)
+		self.assertEqual(post_mock.call_count, 1)
+		sent_body = post_mock.call_args.kwargs["json"]["text"]
+		self.assertIn("Tus proximas citas:", sent_body)
+		self.assertIn("Corte clasico", sent_body)
+
+	@override_settings(TELEGRAM_PROVIDER_ENABLED=True, TELEGRAM_BOT_TOKEN="telegram-token")
+	@patch("notifications.channels.requests.post")
+	def test_webhook_replies_to_citas_command_when_no_upcoming(self, post_mock):
+		post_response = post_mock.return_value
+		post_response.status_code = 200
+		post_response.json.return_value = {"ok": True, "result": {"message_id": 322}}
+
+		url = reverse("telegram-webhook")
+		payload = {
+			"update_id": 200003,
+			"message": {
+				"message_id": 9,
+				"from": {
+					"id": 555,
+					"is_bot": False,
+					"username": "barber_tina",
+				},
+				"chat": {
+					"id": 99887766,
+					"type": "private",
+				},
+				"date": 1713600000,
+				"text": "/citas",
+			},
+		}
+
+		response = self.client.post(
+			url,
+			data=payload,
+			format="json",
+			HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN="telegram-secret",
+		)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(response.data["command_replies"], 1)
+		sent_body = post_mock.call_args.kwargs["json"]["text"]
+		self.assertEqual(sent_body, "No tienes citas programadas.")
+
+	@override_settings(TELEGRAM_PROVIDER_ENABLED=True, TELEGRAM_BOT_TOKEN="telegram-token")
+	@patch("notifications.channels.requests.post")
+	def test_webhook_replies_to_hoy_command_only_with_today_appointments(self, post_mock):
+		post_response = post_mock.return_value
+		post_response.status_code = 200
+		post_response.json.return_value = {"ok": True, "result": {"message_id": 323}}
+
+		client_today = self.user_model.objects.create_user(
+			email="client-hoy@example.com",
+			username="client-hoy",
+			password="testpass123",
+		)
+		TenantMembership.objects.create(
+			user=client_today,
+			business=self.business,
+			role=TenantMembership.Role.CLIENT,
+		)
+		client_tomorrow = self.user_model.objects.create_user(
+			email="client-manana@example.com",
+			username="client-manana",
+			password="testpass123",
+		)
+		TenantMembership.objects.create(
+			user=client_tomorrow,
+			business=self.business,
+			role=TenantMembership.Role.CLIENT,
+		)
+
+		now_local = timezone.localtime(timezone.now())
+		today_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+		today_10am = today_start + timedelta(hours=10)
+		tomorrow_10am = today_10am + timedelta(days=1)
+
+		Appointment.objects.create(
+			business=self.business,
+			client=client_today,
+			employee=self.employee,
+			service=self.service,
+			starts_at=today_10am,
+			ends_at=today_10am + timedelta(minutes=30),
+			status=Appointment.Status.CONFIRMED,
+		)
+		Appointment.objects.create(
+			business=self.business,
+			client=client_tomorrow,
+			employee=self.employee,
+			service=self.service,
+			starts_at=tomorrow_10am,
+			ends_at=tomorrow_10am + timedelta(minutes=30),
+			status=Appointment.Status.CONFIRMED,
+		)
+
+		url = reverse("telegram-webhook")
+		payload = {
+			"update_id": 200004,
+			"message": {
+				"message_id": 10,
+				"from": {
+					"id": 555,
+					"is_bot": False,
+					"username": "barber_tina",
+				},
+				"chat": {
+					"id": 99887766,
+					"type": "private",
+				},
+				"date": 1713600000,
+				"text": "/hoy",
+			},
+		}
+
+		response = self.client.post(
+			url,
+			data=payload,
+			format="json",
+			HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN="telegram-secret",
+		)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(response.data["command_replies"], 1)
+		sent_body = post_mock.call_args.kwargs["json"]["text"]
+		self.assertIn("Tus citas de hoy:", sent_body)
+		self.assertIn("client-hoy", sent_body)
+		self.assertNotIn("client-manana", sent_body)

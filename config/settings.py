@@ -109,7 +109,7 @@ AUTH_PASSWORD_VALIDATORS = [
 
 LANGUAGE_CODE = 'en-us'
 
-TIME_ZONE = 'UTC'
+TIME_ZONE = config("TIME_ZONE", default="America/La_Paz")
 
 USE_I18N = True
 
@@ -209,6 +209,11 @@ NOTIFICATION_CHANNELS = config(
     "NOTIFICATION_CHANNELS",
     cast=Csv(),
     default="EMAIL",
+)
+NOTIFICATION_REMINDER_MINUTES_BEFORE = config(
+    "NOTIFICATION_REMINDER_MINUTES_BEFORE",
+    cast=int,
+    default=1,
 )
 
 CELERY_BROKER_URL = config("CELERY_BROKER_URL", default="redis://localhost:6379/0")

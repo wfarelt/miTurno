@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import timedelta, timezone as dt_timezone
 import re
 
 from django.conf import settings
@@ -9,6 +9,15 @@ from django.utils import timezone
 from notifications.channels import EmailChannel, TelegramChannel, WhatsAppChannel
 from notifications.models import Notification, NotificationOutbox
 from staffs.models import Employee
+
+
+def _reminder_minutes_before() -> int:
+    raw_value = getattr(settings, "NOTIFICATION_REMINDER_MINUTES_BEFORE", 1)
+    try:
+        minutes = int(raw_value)
+    except (TypeError, ValueError):
+        return 1
+    return max(1, minutes)
 
 
 def _event_message(event_type: str, appointment):
@@ -30,9 +39,10 @@ def _event_message(event_type: str, appointment):
             "Recordatorio de cita (24h)",
             f"Recordatorio: tienes una cita en 24 horas ({when_text}).",
         )
+    minutes_before = _reminder_minutes_before()
     return (
-        "Recordatorio de cita (1h)",
-        f"Recordatorio: tienes una cita en 1 hora ({when_text}).",
+        "Recordatorio de cita",
+        f"Recordatorio: tienes una cita en {minutes_before} minuto(s) ({when_text}).",
     )
 
 
@@ -95,6 +105,7 @@ def schedule_booking_notifications(appointment):
 
 def schedule_confirmation_and_reminders(appointment):
     start = appointment.starts_at
+    reminder_delta = timedelta(minutes=_reminder_minutes_before())
     for channel in _configured_channels(appointment):
         schedule_notification(
             appointment=appointment,
@@ -112,7 +123,7 @@ def schedule_confirmation_and_reminders(appointment):
             appointment=appointment,
             channel=channel,
             event_type=Notification.EventType.REMINDER_1H,
-            scheduled_for=start - timedelta(hours=1),
+            scheduled_for=start - reminder_delta,
         )
 
 
@@ -481,6 +492,96 @@ def process_whatsapp_webhook(payload: dict):
     return {"updated": updated, "ignored": ignored, "events": len(statuses)}
 
 
+def _telegram_command(text: str) -> str:
+    if not text:
+        return ""
+    first_token = text.strip().split()[0].lower()
+    return first_token.split("@", 1)[0]
+
+
+def _employee_appointments_summary(employee: Employee, limit: int = 5) -> str:
+    from appointments.models import Appointment
+
+    upcoming = list(
+        Appointment.objects.filter(
+            business=employee.business,
+            employee=employee,
+            status__in=[Appointment.Status.PENDING, Appointment.Status.CONFIRMED],
+            starts_at__gte=timezone.now(),
+        )
+        .select_related("service", "client")
+        .order_by("starts_at")[: limit + 1]
+    )
+
+    if not upcoming:
+        return "No tienes citas programadas."
+
+    visible = upcoming[:limit]
+    lines = ["Tus proximas citas:"]
+    for appointment in visible:
+        local_start = timezone.localtime(appointment.starts_at)
+        client_name = str(getattr(appointment.client, "username", "") or getattr(appointment.client, "email", "") or "Cliente")
+        service_name = str(getattr(appointment.service, "name", "") or "Servicio")
+        lines.append(
+            f"- {local_start.strftime('%d/%m %H:%M')} | {service_name} | {client_name}"
+        )
+
+    remaining = len(upcoming) - len(visible)
+    if remaining > 0:
+        lines.append(f"... y {remaining} mas.")
+    return "\n".join(lines)
+
+
+def _employee_today_appointments_summary(employee: Employee, limit: int = 8) -> str:
+    from appointments.models import Appointment
+
+    now_local = timezone.localtime(timezone.now())
+    start_of_day = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    end_of_day = start_of_day + timedelta(days=1)
+
+    start_utc = start_of_day.astimezone(dt_timezone.utc)
+    end_utc = end_of_day.astimezone(dt_timezone.utc)
+
+    appointments = list(
+        Appointment.objects.filter(
+            business=employee.business,
+            employee=employee,
+            status__in=[Appointment.Status.PENDING, Appointment.Status.CONFIRMED],
+            starts_at__gte=start_utc,
+            starts_at__lt=end_utc,
+        )
+        .select_related("service", "client")
+        .order_by("starts_at")[: limit + 1]
+    )
+
+    if not appointments:
+        return "Hoy no tienes citas programadas."
+
+    visible = appointments[:limit]
+    lines = ["Tus citas de hoy:"]
+    for appointment in visible:
+        local_start = timezone.localtime(appointment.starts_at)
+        client_name = str(getattr(appointment.client, "username", "") or getattr(appointment.client, "email", "") or "Cliente")
+        service_name = str(getattr(appointment.service, "name", "") or "Servicio")
+        lines.append(
+            f"- {local_start.strftime('%H:%M')} | {service_name} | {client_name}"
+        )
+
+    remaining = len(appointments) - len(visible)
+    if remaining > 0:
+        lines.append(f"... y {remaining} mas.")
+    return "\n".join(lines)
+
+
+def _reply_telegram_appointments(chat_id: str, employee: Employee, command: str) -> bool:
+    if command == "/hoy":
+        message = _employee_today_appointments_summary(employee=employee)
+    else:
+        message = _employee_appointments_summary(employee=employee)
+    result = TelegramChannel().send(chat_id=chat_id, body=message)
+    return bool(result.ok)
+
+
 def process_telegram_webhook(payload: dict):
     updates = []
     if isinstance(payload, dict):
@@ -489,6 +590,8 @@ def process_telegram_webhook(payload: dict):
     updated = 0
     ignored = 0
     ambiguous = 0
+    command_replies = 0
+    command_errors = 0
 
     for update in updates:
         message = update.get("message") or update.get("edited_message") or {}
@@ -500,6 +603,7 @@ def process_telegram_webhook(payload: dict):
         sender = message.get("from") or {}
         chat_id = str(chat.get("id", "")).strip()
         username = str(sender.get("username", "")).strip().lstrip("@").lower()
+        text = str(message.get("text", "") or "")
 
         if not chat_id:
             ignored += 1
@@ -531,9 +635,18 @@ def process_telegram_webhook(payload: dict):
         employee.save(update_fields=["telegram_chat_id", "telegram_username", "updated_at"])
         updated += 1
 
+        command = _telegram_command(text)
+        if command in {"/citas", "/hoy"}:
+            if _reply_telegram_appointments(chat_id=chat_id, employee=employee, command=command):
+                command_replies += 1
+            else:
+                command_errors += 1
+
     return {
         "updated": updated,
         "ignored": ignored,
         "ambiguous": ambiguous,
+        "command_replies": command_replies,
+        "command_errors": command_errors,
         "events": len(updates),
     }
