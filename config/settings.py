@@ -58,7 +58,7 @@ ROOT_URLCONF = 'config.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [BASE_DIR / 'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -186,6 +186,21 @@ WHATSAPP_PHONE_NUMBER_ID = config("WHATSAPP_PHONE_NUMBER_ID", default="")
 WHATSAPP_ACCESS_TOKEN = config("WHATSAPP_ACCESS_TOKEN", default="")
 WHATSAPP_WEBHOOK_VERIFY_TOKEN = config("WHATSAPP_WEBHOOK_VERIFY_TOKEN", default="")
 WHATSAPP_APP_SECRET = config("WHATSAPP_APP_SECRET", default="")
+WHATSAPP_CIRCUIT_BREAKER_ENABLED = config(
+    "WHATSAPP_CIRCUIT_BREAKER_ENABLED",
+    cast=bool,
+    default=True,
+)
+WHATSAPP_CIRCUIT_FAILURE_THRESHOLD = config(
+    "WHATSAPP_CIRCUIT_FAILURE_THRESHOLD",
+    cast=int,
+    default=5,
+)
+WHATSAPP_CIRCUIT_RECOVERY_SECONDS = config(
+    "WHATSAPP_CIRCUIT_RECOVERY_SECONDS",
+    cast=int,
+    default=120,
+)
 
 NOTIFICATION_CHANNELS = config(
     "NOTIFICATION_CHANNELS",

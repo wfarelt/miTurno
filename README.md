@@ -2,6 +2,8 @@
 
 Backend SaaS multi-tenant para agendamiento de citas de peluquerias/barberias.
 
+Guia paso a paso de uso: ver `MANUAL_USO.md`.
+
 Estado actual: fase inicial implementada con Django + DRF + JWT + dominio multi-tenant.
 
 ## Stack
@@ -144,6 +146,8 @@ Auditoria por API:
 
 - `GET /api/v1/notifications/` (solo MANAGER / OWNER_ADMIN)
 - Filtros: `status`, `channel`, `event_type`
+- Dashboard de metricas: `GET /api/v1/notifications/dashboard/`
+	- Filtros opcionales: `start_at`, `end_at` (ISO datetime o `YYYY-MM-DD`)
 
 Webhook WhatsApp (Meta):
 
@@ -182,6 +186,13 @@ La API detecta tenant por:
 
 ## Siguiente fase recomendada
 
-- Dashboard admin con metricas de entrega por canal/evento
-- Politicas de reintento por tipo de error (4xx vs 5xx)
-- Circuit breaker por proveedor externo (degradacion controlada)
+- Dashboard admin con metricas de entrega por canal/evento (aplicado)
+- Politicas de reintento por tipo de error (4xx vs 5xx) (aplicado)
+- Circuit breaker por proveedor externo (degradacion controlada) (aplicado)
+
+
+## Configuracion adicional de resiliencia
+
+- `WHATSAPP_CIRCUIT_BREAKER_ENABLED` (default `True`)
+- `WHATSAPP_CIRCUIT_FAILURE_THRESHOLD` (default `5`)
+- `WHATSAPP_CIRCUIT_RECOVERY_SECONDS` (default `120`)

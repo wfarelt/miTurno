@@ -1,0 +1,169 @@
+{% extends "admin/base_site.html" %}
+
+{% block extrastyle %}
+{{ block.super }}
+<style>
+  .dashboard-grid {
+    display: grid;
+    gap: 16px;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    margin: 18px 0 24px;
+  }
+  .kpi-card {
+    border: 1px solid #d4d8de;
+    border-radius: 10px;
+    background: #ffffff;
+    padding: 14px;
+  }
+  .kpi-label {
+    margin: 0;
+    color: #586176;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .kpi-value {
+    margin: 8px 0 0;
+    font-size: 30px;
+    line-height: 1;
+    color: #1d2433;
+    font-weight: 700;
+  }
+  .section {
+    margin-bottom: 24px;
+  }
+  .section h2 {
+    margin-bottom: 10px;
+  }
+  .table-wrap {
+    border: 1px solid #d4d8de;
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    background: #ffffff;
+  }
+  th, td {
+    border-bottom: 1px solid #eceff4;
+    padding: 10px 12px;
+    text-align: left;
+  }
+  th {
+    background: #f6f8fb;
+  }
+  .meta {
+    color: #586176;
+    font-size: 13px;
+    margin-top: 0;
+  }
+  .two-cols {
+    display: grid;
+    gap: 16px;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div id="content-main">
+  <h1>Dashboard de Plataforma</h1>
+  <p class="meta">Generado: {{ dashboard_generated_at }}</p>
+
+  <div class="dashboard-grid">
+    <div class="kpi-card"><p class="kpi-label">Usuarios</p><p class="kpi-value">{{ kpis.users }}</p></div>
+    <div class="kpi-card"><p class="kpi-label">Negocios</p><p class="kpi-value">{{ kpis.businesses }}</p></div>
+    <div class="kpi-card"><p class="kpi-label">Negocios Activos</p><p class="kpi-value">{{ kpis.active_businesses }}</p></div>
+    <div class="kpi-card"><p class="kpi-label">Membresias</p><p class="kpi-value">{{ kpis.memberships }}</p></div>
+    <div class="kpi-card"><p class="kpi-label">Servicios</p><p class="kpi-value">{{ kpis.services }}</p></div>
+    <div class="kpi-card"><p class="kpi-label">Empleados</p><p class="kpi-value">{{ kpis.employees }}</p></div>
+    <div class="kpi-card"><p class="kpi-label">Citas</p><p class="kpi-value">{{ kpis.appointments }}</p></div>
+    <div class="kpi-card"><p class="kpi-label">Notificaciones</p><p class="kpi-value">{{ kpis.notifications }}</p></div>
+  </div>
+
+  <div class="section two-cols">
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Estado de Citas</th><th>Total</th></tr></thead>
+        <tbody>
+          {% for row in appointment_status %}
+          <tr><td>{{ row.status }}</td><td>{{ row.total }}</td></tr>
+          {% empty %}
+          <tr><td colspan="2">Sin datos</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Estado de Notificaciones</th><th>Total</th></tr></thead>
+        <tbody>
+          {% for row in notification_status %}
+          <tr><td>{{ row.status }}</td><td>{{ row.total }}</td></tr>
+          {% empty %}
+          <tr><td colspan="2">Sin datos</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="section two-cols">
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Canal de Notificacion</th><th>Total</th></tr></thead>
+        <tbody>
+          {% for row in notification_channels %}
+          <tr><td>{{ row.channel }}</td><td>{{ row.total }}</td></tr>
+          {% empty %}
+          <tr><td colspan="2">Sin datos</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Estado Outbox</th><th>Total</th></tr></thead>
+        <tbody>
+          {% for row in outbox_status %}
+          <tr><td>{{ row.status }}</td><td>{{ row.total }}</td></tr>
+          {% empty %}
+          <tr><td colspan="2">Sin datos</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="section two-cols">
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Citas ultimos 7 dias</th><th>Total</th></tr></thead>
+        <tbody>
+          {% for row in appointments_per_day %}
+          <tr><td>{{ row.day }}</td><td>{{ row.total }}</td></tr>
+          {% empty %}
+          <tr><td colspan="2">Sin datos</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Negocios recientes</th><th>Slug</th></tr></thead>
+        <tbody>
+          {% for business in recent_businesses %}
+          <tr><td>{{ business.name }}</td><td>{{ business.slug }}</td></tr>
+          {% empty %}
+          <tr><td colspan="2">Sin datos</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

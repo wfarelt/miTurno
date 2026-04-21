@@ -1,6 +1,8 @@
 from datetime import timedelta
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.core import mail
 from django.test import TestCase, override_settings
 from django.urls import reverse
@@ -8,6 +10,7 @@ from django.utils import timezone
 from rest_framework.test import APITestCase
 
 from appointments.models import Appointment
+from notifications.channels import ChannelResult, WhatsAppChannel
 from notifications.models import Notification, NotificationOutbox
 from notifications.services import (
 	dispatch_due_notifications,
@@ -122,6 +125,39 @@ class NotificationFlowTests(TestCase):
 		self.assertEqual(outbox.status, NotificationOutbox.Status.DELIVERED)
 		self.assertEqual(len(mail.outbox), 1)
 
+	def test_dispatch_due_notifications_marks_permanent_failures_without_retry(self):
+		appointment = self._appointment()
+		notification = Notification.objects.create(
+			business=self.business,
+			appointment=appointment,
+			channel=Notification.Channel.WHATSAPP,
+			event_type=Notification.EventType.APPOINTMENT_CONFIRMED,
+			scheduled_for=timezone.now() - timedelta(minutes=1),
+			payload={"body": "Body"},
+		)
+		outbox = NotificationOutbox.objects.create(
+			business=self.business,
+			notification=notification,
+			next_attempt_at=timezone.now() - timedelta(minutes=1),
+		)
+
+		with patch(
+			"notifications.channels.WhatsAppChannel.send",
+			return_value=ChannelResult(
+				ok=False,
+				error="WhatsApp API error (400): invalid payload",
+				error_kind="http_400",
+			),
+		):
+			dispatch_due_notifications(limit=10, max_retries=5)
+
+		notification.refresh_from_db()
+		outbox.refresh_from_db()
+
+		self.assertEqual(outbox.status, NotificationOutbox.Status.FAILED)
+		self.assertEqual(notification.status, Notification.Status.FAILED)
+		self.assertEqual(outbox.attempts, 1)
+
 
 class NotificationAuditApiTests(APITestCase):
 	def setUp(self):
@@ -196,6 +232,27 @@ class NotificationAuditApiTests(APITestCase):
 		response = self.client.get(url, HTTP_X_BUSINESS_SLUG=self.business.slug)
 
 		self.assertEqual(response.status_code, 403)
+
+	def test_manager_can_get_notification_dashboard(self):
+		self.client.force_authenticate(self.manager_user)
+		url = reverse("notification-dashboard")
+		response = self.client.get(url, HTTP_X_BUSINESS_SLUG=self.business.slug)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertIn("totals", response.data)
+		self.assertEqual(response.data["totals"]["total"], 1)
+		self.assertIn("by_channel", response.data)
+
+	def test_dashboard_rejects_invalid_date_filter(self):
+		self.client.force_authenticate(self.manager_user)
+		url = reverse("notification-dashboard")
+		response = self.client.get(
+			url,
+			{"start_at": "not-a-date"},
+			HTTP_X_BUSINESS_SLUG=self.business.slug,
+		)
+
+		self.assertEqual(response.status_code, 400)
 
 
 @override_settings(
@@ -297,3 +354,33 @@ class WhatsAppWebhookTests(APITestCase):
 		self.outbox.refresh_from_db()
 		self.assertEqual(self.outbox.status, NotificationOutbox.Status.DELIVERED)
 		self.assertEqual(self.outbox.provider_status, "delivered")
+
+
+@override_settings(
+	WHATSAPP_PROVIDER_ENABLED=True,
+	WHATSAPP_ACCESS_TOKEN="token",
+	WHATSAPP_PHONE_NUMBER_ID="123456",
+	WHATSAPP_CIRCUIT_BREAKER_ENABLED=True,
+	WHATSAPP_CIRCUIT_FAILURE_THRESHOLD=2,
+	WHATSAPP_CIRCUIT_RECOVERY_SECONDS=300,
+)
+class WhatsAppCircuitBreakerTests(TestCase):
+	def setUp(self):
+		cache.clear()
+
+	@patch("notifications.channels.requests.post")
+	def test_circuit_breaker_opens_after_threshold(self, post_mock):
+		response_mock = post_mock.return_value
+		response_mock.status_code = 503
+		response_mock.text = "service unavailable"
+
+		channel = WhatsAppChannel()
+		first = channel.send(to_phone="573001234567", body="msg-1")
+		second = channel.send(to_phone="573001234567", body="msg-2")
+		third = channel.send(to_phone="573001234567", body="msg-3")
+
+		self.assertFalse(first.ok)
+		self.assertFalse(second.ok)
+		self.assertFalse(third.ok)
+		self.assertEqual(third.error_kind, "circuit_open")
+		self.assertEqual(post_mock.call_count, 2)

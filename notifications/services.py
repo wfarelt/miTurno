@@ -1,7 +1,9 @@
 from datetime import timedelta
+import re
 
 from django.conf import settings
 from django.db import transaction
+from django.db.models import Avg, Count, Q
 from django.utils import timezone
 
 from notifications.channels import EmailChannel, WhatsAppChannel
@@ -127,6 +129,151 @@ def backfill_confirmed_reminders(lookahead_hours: int = 48):
     return created
 
 
+def build_notification_dashboard(business, start_at=None, end_at=None):
+    base_queryset = Notification.objects.filter(business=business)
+    outbox_queryset = NotificationOutbox.objects.filter(business=business)
+
+    if start_at is not None:
+        base_queryset = base_queryset.filter(created_at__gte=start_at)
+        outbox_queryset = outbox_queryset.filter(created_at__gte=start_at)
+    if end_at is not None:
+        base_queryset = base_queryset.filter(created_at__lte=end_at)
+        outbox_queryset = outbox_queryset.filter(created_at__lte=end_at)
+
+    total = base_queryset.count()
+    sent = base_queryset.filter(status=Notification.Status.SENT).count()
+    failed = base_queryset.filter(status=Notification.Status.FAILED).count()
+    pending = base_queryset.filter(status=Notification.Status.PENDING).count()
+    avg_retry_count = base_queryset.aggregate(value=Avg("retry_count")).get("value") or 0
+    delivery_rate = round((sent / total) * 100, 2) if total else 0.0
+
+    by_channel_rows = (
+        base_queryset.values("channel")
+        .annotate(
+            total=Count("id"),
+            sent=Count("id", filter=Q(status=Notification.Status.SENT)),
+            failed=Count("id", filter=Q(status=Notification.Status.FAILED)),
+            pending=Count("id", filter=Q(status=Notification.Status.PENDING)),
+        )
+        .order_by("channel")
+    )
+    by_channel = []
+    for row in by_channel_rows:
+        channel_total = row["total"]
+        by_channel.append(
+            {
+                "channel": row["channel"],
+                "total": channel_total,
+                "sent": row["sent"],
+                "failed": row["failed"],
+                "pending": row["pending"],
+                "delivery_rate": round((row["sent"] / channel_total) * 100, 2)
+                if channel_total
+                else 0.0,
+            }
+        )
+
+    by_event_rows = (
+        base_queryset.values("event_type")
+        .annotate(
+            total=Count("id"),
+            sent=Count("id", filter=Q(status=Notification.Status.SENT)),
+            failed=Count("id", filter=Q(status=Notification.Status.FAILED)),
+            pending=Count("id", filter=Q(status=Notification.Status.PENDING)),
+        )
+        .order_by("event_type")
+    )
+    by_event_type = []
+    for row in by_event_rows:
+        event_total = row["total"]
+        by_event_type.append(
+            {
+                "event_type": row["event_type"],
+                "total": event_total,
+                "sent": row["sent"],
+                "failed": row["failed"],
+                "pending": row["pending"],
+                "delivery_rate": round((row["sent"] / event_total) * 100, 2)
+                if event_total
+                else 0.0,
+            }
+        )
+
+    outbox_by_status_rows = outbox_queryset.values("status").annotate(total=Count("id"))
+    outbox_by_status = {row["status"]: row["total"] for row in outbox_by_status_rows}
+
+    provider_status_rows = (
+        outbox_queryset.exclude(provider_status="")
+        .values("provider_status")
+        .annotate(total=Count("id"))
+        .order_by("provider_status")
+    )
+    provider_statuses = [
+        {"provider_status": row["provider_status"], "total": row["total"]}
+        for row in provider_status_rows
+    ]
+
+    return {
+        "range": {
+            "start_at": start_at,
+            "end_at": end_at,
+        },
+        "totals": {
+            "total": total,
+            "sent": sent,
+            "failed": failed,
+            "pending": pending,
+            "delivery_rate": delivery_rate,
+            "avg_retry_count": round(float(avg_retry_count), 2),
+        },
+        "outbox": {
+            "pending": outbox_by_status.get(NotificationOutbox.Status.PENDING, 0),
+            "processing": outbox_by_status.get(NotificationOutbox.Status.PROCESSING, 0),
+            "delivered": outbox_by_status.get(NotificationOutbox.Status.DELIVERED, 0),
+            "failed": outbox_by_status.get(NotificationOutbox.Status.FAILED, 0),
+        },
+        "by_channel": by_channel,
+        "by_event_type": by_event_type,
+        "provider_statuses": provider_statuses,
+    }
+
+
+def _extract_http_status(error_message: str) -> int | None:
+    match = re.search(r"\((\d{3})\)", error_message or "")
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_permanent_failure(channel: str, error_message: str, error_kind: str = "") -> bool:
+    text = (error_message or "").lower()
+    kind = (error_kind or "").lower()
+
+    permanent_kinds = {"validation", "configuration", "circuit_open"}
+    if kind in permanent_kinds:
+        return True
+
+    if channel == Notification.Channel.WHATSAPP:
+        http_status = _extract_http_status(error_message)
+        if http_status is not None:
+            # Retry only timeout/throttling/server responses.
+            if 400 <= http_status < 500 and http_status not in {408, 429}:
+                return True
+            return False
+        if "recipient phone is required" in text:
+            return True
+        if "credentials are missing" in text or "not configured" in text:
+            return True
+
+    if channel == Notification.Channel.EMAIL and "recipient email is required" in text:
+        return True
+
+    return False
+
+
 def dispatch_due_notifications(limit: int = 100, max_retries: int = 3):
     now = timezone.now()
     queryset = (
@@ -190,7 +337,14 @@ def dispatch_due_notifications(limit: int = 100, max_retries: int = 3):
                 sent += 1
             else:
                 fresh_outbox.last_error = result.error
-                if fresh_outbox.attempts >= max_retries:
+                is_permanent_failure = _is_permanent_failure(
+                    channel=notification.channel,
+                    error_message=result.error,
+                    error_kind=getattr(result, "error_kind", ""),
+                )
+                if is_permanent_failure:
+                    fresh_outbox.status = NotificationOutbox.Status.FAILED
+                elif fresh_outbox.attempts >= max_retries:
                     fresh_outbox.status = NotificationOutbox.Status.FAILED
                 else:
                     # Exponential backoff in minutes: 2, 4, 8...

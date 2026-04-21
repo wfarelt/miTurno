@@ -20,11 +20,14 @@ from django.urls import include, path
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
+from config.admin_dashboard import superadmin_dashboard
+
 
 def healthcheck(_request):
     return JsonResponse({"status": "ok"})
 
 urlpatterns = [
+    path("admin/dashboard/", admin.site.admin_view(superadmin_dashboard), name="admin-dashboard"),
     path('admin/', admin.site.urls),
     path("health/", healthcheck, name="healthcheck"),
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
