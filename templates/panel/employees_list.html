@@ -1,0 +1,51 @@
+{% extends "panel/base.html" %}
+
+{% block title %}Peluqueros{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h1 class="h3 mb-0">Peluqueros</h1>
+  <a class="btn btn-primary" href="{% url 'panel:employees-create' %}">Nuevo peluquero</a>
+</div>
+
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-striped mb-0">
+      <thead>
+        <tr>
+          <th>Nombre</th>
+          <th>Email</th>
+          <th>Telefono</th>
+          <th>Telegram</th>
+          <th>Telegram Chat ID</th>
+          <th>Cargo</th>
+          <th>Activo</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for employee in employees %}
+        <tr>
+          <td>{{ employee.first_name }} {{ employee.last_name }}</td>
+          <td>{{ employee.email }}</td>
+          <td>{{ employee.phone }}</td>
+          <td>{{ employee.telegram_username }}</td>
+          <td>{{ employee.telegram_chat_id }}</td>
+          <td>{{ employee.title }}</td>
+          <td>{% if employee.is_active %}Si{% else %}No{% endif %}</td>
+          <td class="text-end">
+            <form method="post" action="{% url 'panel:employees-telegram-test' employee.id %}" class="d-inline">
+              {% csrf_token %}
+              <button class="btn btn-sm btn-outline-primary" type="submit">Probar Telegram</button>
+            </form>
+            <a href="{% url 'panel:employees-edit' employee.id %}" class="btn btn-sm btn-outline-secondary">Editar</a>
+          </td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="8" class="text-center py-4">Sin peluqueros.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

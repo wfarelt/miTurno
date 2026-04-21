@@ -17,6 +17,7 @@ Including another URLconf
 from django.contrib import admin
 from django.http import JsonResponse
 from django.urls import include, path
+from django.views.generic import RedirectView
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
@@ -27,8 +28,10 @@ def healthcheck(_request):
     return JsonResponse({"status": "ok"})
 
 urlpatterns = [
+    path("", RedirectView.as_view(pattern_name="panel:login", permanent=False), name="home"),
     path("admin/dashboard/", admin.site.admin_view(superadmin_dashboard), name="admin-dashboard"),
     path('admin/', admin.site.urls),
+    path("panel/", include("panel.urls")),
     path("health/", healthcheck, name="healthcheck"),
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
     path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),

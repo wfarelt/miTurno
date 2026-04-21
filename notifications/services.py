@@ -6,8 +6,9 @@ from django.db import transaction
 from django.db.models import Avg, Count, Q
 from django.utils import timezone
 
-from notifications.channels import EmailChannel, WhatsAppChannel
+from notifications.channels import EmailChannel, TelegramChannel, WhatsAppChannel
 from notifications.models import Notification, NotificationOutbox
+from staffs.models import Employee
 
 
 def _event_message(event_type: str, appointment):
@@ -41,6 +42,11 @@ def _configured_channels(appointment):
     for channel in raw_channels:
         if channel == Notification.Channel.WHATSAPP and not appointment.client.phone:
             continue
+        if channel == Notification.Channel.TELEGRAM:
+            employee_chat_id = str(getattr(appointment.employee, "telegram_chat_id", "") or "").strip()
+            default_chat_id = str(getattr(settings, "TELEGRAM_DEFAULT_CHAT_ID", "") or "").strip()
+            if not employee_chat_id and not default_chat_id:
+                continue
         channels.append(channel)
 
     if not channels:
@@ -271,6 +277,17 @@ def _is_permanent_failure(channel: str, error_message: str, error_kind: str = ""
     if channel == Notification.Channel.EMAIL and "recipient email is required" in text:
         return True
 
+    if channel == Notification.Channel.TELEGRAM:
+        http_status = _extract_http_status(error_message)
+        if http_status is not None:
+            if 400 <= http_status < 500 and http_status not in {408, 429}:
+                return True
+            return False
+        if "chat_id is required" in text:
+            return True
+        if "credentials are missing" in text or "not configured" in text:
+            return True
+
     return False
 
 
@@ -292,6 +309,7 @@ def dispatch_due_notifications(limit: int = 100, max_retries: int = 3):
 
     email_channel = EmailChannel()
     whatsapp_channel = WhatsAppChannel()
+    telegram_channel = TelegramChannel()
 
     sent = 0
     failed = 0
@@ -308,9 +326,19 @@ def dispatch_due_notifications(limit: int = 100, max_retries: int = 3):
                 subject=subject,
                 body=body,
             )
-        else:
+        elif notification.channel == Notification.Channel.WHATSAPP:
             result = whatsapp_channel.send(
                 to_phone=appointment.client.phone,
+                body=body,
+            )
+        else:
+            telegram_chat_id = str(
+                payload.get("telegram_chat_id")
+                or getattr(appointment.employee, "telegram_chat_id", "")
+                or getattr(settings, "TELEGRAM_DEFAULT_CHAT_ID", "")
+            ).strip()
+            result = telegram_channel.send(
+                chat_id=telegram_chat_id,
                 body=body,
             )
 
@@ -329,6 +357,9 @@ def dispatch_due_notifications(limit: int = 100, max_retries: int = 3):
                 else:
                     fresh_outbox.status = NotificationOutbox.Status.DELIVERED
                     fresh_outbox.delivered_at = timezone.now()
+                    fresh_outbox.provider_message_id = result.external_message_id or None
+                    fresh_outbox.provider_payload = result.raw_response or {}
+                    fresh_outbox.provider_status = "delivered"
                 fresh_outbox.last_error = ""
 
                 fresh_notification.status = Notification.Status.SENT
@@ -448,3 +479,61 @@ def process_whatsapp_webhook(payload: dict):
             updated += 1
 
     return {"updated": updated, "ignored": ignored, "events": len(statuses)}
+
+
+def process_telegram_webhook(payload: dict):
+    updates = []
+    if isinstance(payload, dict):
+        updates.append(payload)
+
+    updated = 0
+    ignored = 0
+    ambiguous = 0
+
+    for update in updates:
+        message = update.get("message") or update.get("edited_message") or {}
+        if not isinstance(message, dict):
+            ignored += 1
+            continue
+
+        chat = message.get("chat") or {}
+        sender = message.get("from") or {}
+        chat_id = str(chat.get("id", "")).strip()
+        username = str(sender.get("username", "")).strip().lstrip("@").lower()
+
+        if not chat_id:
+            ignored += 1
+            continue
+        if not username:
+            ignored += 1
+            continue
+
+        matches = Employee.objects.filter(
+            telegram_username__iexact=username,
+            is_active=True,
+        )
+        count = matches.count()
+        if count == 0:
+            ignored += 1
+            continue
+        if count > 1:
+            ambiguous += 1
+            continue
+
+        employee = matches.first()
+        if employee is None:
+            ignored += 1
+            continue
+
+        employee.telegram_chat_id = chat_id
+        if not employee.telegram_username:
+            employee.telegram_username = username
+        employee.save(update_fields=["telegram_chat_id", "telegram_username", "updated_at"])
+        updated += 1
+
+    return {
+        "updated": updated,
+        "ignored": ignored,
+        "ambiguous": ambiguous,
+        "events": len(updates),
+    }

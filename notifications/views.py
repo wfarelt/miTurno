@@ -13,7 +13,11 @@ from rest_framework.views import APIView
 
 from notifications.models import Notification
 from notifications.serializers import NotificationAuditSerializer
-from notifications.services import build_notification_dashboard, process_whatsapp_webhook
+from notifications.services import (
+	build_notification_dashboard,
+	process_telegram_webhook,
+	process_whatsapp_webhook,
+)
 from tenants.permissions import IsBusinessAdmin
 
 
@@ -110,4 +114,19 @@ class WhatsAppWebhookView(APIView):
 				return Response({"detail": "Invalid webhook signature."}, status=403)
 
 		result = process_whatsapp_webhook(request.data or {})
+		return Response(result, status=200)
+
+
+class TelegramWebhookView(APIView):
+	authentication_classes = []
+	permission_classes = [AllowAny]
+
+	def post(self, request):
+		expected = getattr(settings, "TELEGRAM_WEBHOOK_SECRET_TOKEN", "")
+		if expected:
+			received = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+			if received != expected:
+				return Response({"detail": "Invalid Telegram webhook secret."}, status=403)
+
+		result = process_telegram_webhook(request.data or {})
 		return Response(result, status=200)

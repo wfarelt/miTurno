@@ -8,6 +8,7 @@ class Notification(TimeStampedModel):
 	class Channel(models.TextChoices):
 		EMAIL = "EMAIL", "Email"
 		WHATSAPP = "WHATSAPP", "WhatsApp"
+		TELEGRAM = "TELEGRAM", "Telegram"
 
 	class EventType(models.TextChoices):
 		BOOKING_CREATED = "BOOKING_CREATED", "Booking Created"

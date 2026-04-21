@@ -29,6 +29,8 @@ class EmployeeSerializer(serializers.ModelSerializer):
             "last_name",
             "email",
             "phone",
+            "telegram_username",
+            "telegram_chat_id",
             "title",
             "is_active",
             "availabilities",

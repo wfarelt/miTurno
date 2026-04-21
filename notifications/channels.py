@@ -30,6 +30,68 @@ class EmailChannel:
         return ChannelResult(ok=True)
 
 
+class TelegramChannel:
+    """Telegram Bot API adapter."""
+
+    def send(self, chat_id: str, body: str) -> ChannelResult:
+        enabled = getattr(settings, "TELEGRAM_PROVIDER_ENABLED", False)
+        if not enabled:
+            return ChannelResult(
+                ok=False,
+                error="Telegram provider is not configured yet.",
+                error_kind="configuration",
+            )
+
+        if not chat_id:
+            return ChannelResult(ok=False, error="Telegram chat_id is required.", error_kind="validation")
+
+        token = getattr(settings, "TELEGRAM_BOT_TOKEN", "")
+        api_base_url = getattr(settings, "TELEGRAM_API_URL", "https://api.telegram.org")
+
+        if not token:
+            return ChannelResult(
+                ok=False,
+                error="Telegram credentials are missing (bot token).",
+                error_kind="configuration",
+            )
+
+        url = f"{api_base_url.rstrip('/')}/bot{token}/sendMessage"
+        payload = {
+            "chat_id": chat_id,
+            "text": body,
+            "disable_web_page_preview": True,
+        }
+
+        try:
+            response = requests.post(url, json=payload, timeout=10)
+        except requests.RequestException as exc:
+            return ChannelResult(ok=False, error=f"Telegram request failed: {exc}", error_kind="network")
+
+        if response.status_code >= 300:
+            return ChannelResult(
+                ok=False,
+                error=f"Telegram API error ({response.status_code}): {response.text[:300]}",
+                error_kind=f"http_{response.status_code}",
+            )
+
+        response_json = {}
+        try:
+            response_json = response.json()
+        except ValueError:
+            response_json = {}
+
+        message_id = ""
+        result_payload = response_json.get("result", {})
+        if isinstance(result_payload, dict):
+            message_id = str(result_payload.get("message_id", ""))
+
+        return ChannelResult(
+            ok=True,
+            external_message_id=message_id,
+            raw_response=response_json,
+        )
+
+
 class WhatsAppChannel:
     """Meta WhatsApp Cloud API adapter."""
 

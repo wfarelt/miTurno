@@ -9,6 +9,8 @@ class Employee(TimeStampedModel):
 	last_name = models.CharField(max_length=100)
 	email = models.EmailField(blank=True)
 	phone = models.CharField(max_length=20, blank=True)
+	telegram_username = models.CharField(max_length=64, blank=True)
+	telegram_chat_id = models.CharField(max_length=64, blank=True)
 	title = models.CharField(max_length=100, blank=True)
 	is_active = models.BooleanField(default=True)
 

@@ -158,6 +158,74 @@ class NotificationFlowTests(TestCase):
 		self.assertEqual(notification.status, Notification.Status.FAILED)
 		self.assertEqual(outbox.attempts, 1)
 
+	@override_settings(
+		TELEGRAM_PROVIDER_ENABLED=True,
+		TELEGRAM_BOT_TOKEN="telegram-token",
+		TELEGRAM_DEFAULT_CHAT_ID="123456",
+	)
+	@patch("notifications.channels.requests.post")
+	def test_dispatch_due_notifications_sends_telegram(self, post_mock):
+		response_mock = post_mock.return_value
+		response_mock.status_code = 200
+		response_mock.json.return_value = {"ok": True, "result": {"message_id": 77}}
+
+		appointment = self._appointment()
+		notification = Notification.objects.create(
+			business=self.business,
+			appointment=appointment,
+			channel=Notification.Channel.TELEGRAM,
+			event_type=Notification.EventType.APPOINTMENT_CONFIRMED,
+			scheduled_for=timezone.now() - timedelta(minutes=1),
+			payload={"body": "Body"},
+		)
+		outbox = NotificationOutbox.objects.create(
+			business=self.business,
+			notification=notification,
+			next_attempt_at=timezone.now() - timedelta(minutes=1),
+		)
+
+		result = dispatch_due_notifications(limit=10)
+		notification.refresh_from_db()
+		outbox.refresh_from_db()
+
+		self.assertEqual(result["sent"], 1)
+		self.assertEqual(notification.status, Notification.Status.SENT)
+		self.assertEqual(outbox.status, NotificationOutbox.Status.DELIVERED)
+		self.assertEqual(outbox.provider_message_id, "77")
+
+	@override_settings(
+		TELEGRAM_PROVIDER_ENABLED=True,
+		TELEGRAM_BOT_TOKEN="telegram-token",
+		TELEGRAM_DEFAULT_CHAT_ID="123456",
+	)
+	@patch("notifications.channels.requests.post")
+	def test_dispatch_due_notifications_telegram_400_is_permanent_failure(self, post_mock):
+		response_mock = post_mock.return_value
+		response_mock.status_code = 400
+		response_mock.text = "chat not found"
+
+		appointment = self._appointment()
+		notification = Notification.objects.create(
+			business=self.business,
+			appointment=appointment,
+			channel=Notification.Channel.TELEGRAM,
+			event_type=Notification.EventType.APPOINTMENT_CONFIRMED,
+			scheduled_for=timezone.now() - timedelta(minutes=1),
+			payload={"body": "Body"},
+		)
+		outbox = NotificationOutbox.objects.create(
+			business=self.business,
+			notification=notification,
+			next_attempt_at=timezone.now() - timedelta(minutes=1),
+		)
+
+		dispatch_due_notifications(limit=10, max_retries=5)
+		notification.refresh_from_db()
+		outbox.refresh_from_db()
+
+		self.assertEqual(outbox.status, NotificationOutbox.Status.FAILED)
+		self.assertEqual(notification.status, Notification.Status.FAILED)
+
 
 class NotificationAuditApiTests(APITestCase):
 	def setUp(self):
@@ -384,3 +452,57 @@ class WhatsAppCircuitBreakerTests(TestCase):
 		self.assertFalse(third.ok)
 		self.assertEqual(third.error_kind, "circuit_open")
 		self.assertEqual(post_mock.call_count, 2)
+
+
+@override_settings(TELEGRAM_WEBHOOK_SECRET_TOKEN="telegram-secret")
+class TelegramWebhookTests(APITestCase):
+	def setUp(self):
+		self.business = Business.objects.create(name="Telegram Salon", slug="telegram-salon")
+		self.employee = Employee.objects.create(
+			business=self.business,
+			first_name="Tina",
+			last_name="Stylist",
+			telegram_username="barber_tina",
+		)
+
+	def test_webhook_updates_employee_chat_id(self):
+		url = reverse("telegram-webhook")
+		payload = {
+			"update_id": 100001,
+			"message": {
+				"message_id": 5,
+				"from": {
+					"id": 555,
+					"is_bot": False,
+					"username": "barber_tina",
+				},
+				"chat": {
+					"id": 99887766,
+					"type": "private",
+				},
+				"date": 1713600000,
+				"text": "/start",
+			},
+		}
+
+		response = self.client.post(
+			url,
+			data=payload,
+			format="json",
+			HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN="telegram-secret",
+		)
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(response.data["updated"], 1)
+
+		self.employee.refresh_from_db()
+		self.assertEqual(self.employee.telegram_chat_id, "99887766")
+
+	def test_webhook_rejects_invalid_secret(self):
+		url = reverse("telegram-webhook")
+		response = self.client.post(
+			url,
+			data={"update_id": 1},
+			format="json",
+			HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN="wrong",
+		)
+		self.assertEqual(response.status_code, 403)

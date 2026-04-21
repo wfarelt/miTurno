@@ -39,6 +39,7 @@ INSTALLED_APPS = [
     'staffs',
     'appointments',
     'notifications',
+    'panel',
 ]
 
 MIDDLEWARE = [
@@ -76,24 +77,12 @@ WSGI_APPLICATION = 'config.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
-if config("POSTGRES_DB", default=""):
-    DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.postgresql",
-            "NAME": config("POSTGRES_DB"),
-            "USER": config("POSTGRES_USER", default="postgres"),
-            "PASSWORD": config("POSTGRES_PASSWORD", default="postgres"),
-            "HOST": config("POSTGRES_HOST", default="localhost"),
-            "PORT": config("POSTGRES_PORT", cast=int, default=5432),
-        }
+DATABASES = {
+    "default": {
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": BASE_DIR / "db.sqlite3",
     }
-else:
-    DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.sqlite3",
-            "NAME": BASE_DIR / "db.sqlite3",
-        }
-    }
+}
 
 
 # Password validation
@@ -201,6 +190,20 @@ WHATSAPP_CIRCUIT_RECOVERY_SECONDS = config(
     cast=int,
     default=120,
 )
+
+TELEGRAM_PROVIDER_ENABLED = config(
+    "TELEGRAM_PROVIDER_ENABLED",
+    cast=bool,
+    default=False,
+)
+TELEGRAM_API_URL = config(
+    "TELEGRAM_API_URL",
+    default="https://api.telegram.org",
+)
+TELEGRAM_BOT_USERNAME = config("TELEGRAM_BOT_USERNAME", default="")
+TELEGRAM_BOT_TOKEN = config("TELEGRAM_BOT_TOKEN", default="")
+TELEGRAM_DEFAULT_CHAT_ID = config("TELEGRAM_DEFAULT_CHAT_ID", default="")
+TELEGRAM_WEBHOOK_SECRET_TOKEN = config("TELEGRAM_WEBHOOK_SECRET_TOKEN", default="")
 
 NOTIFICATION_CHANNELS = config(
     "NOTIFICATION_CHANNELS",

@@ -17,8 +17,6 @@ Conceptos clave:
 En la raiz del proyecto:
 
 ```bash
-python -m venv venv
-source venv/Scripts/activate  # Windows Git Bash
 pip install -r requirements.txt
 python manage.py migrate
 python manage.py createsuperuser

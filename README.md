@@ -11,8 +11,7 @@ Estado actual: fase inicial implementada con Django + DRF + JWT + dominio multi-
 - Django 6
 - Django REST Framework
 - JWT con djangorestframework-simplejwt
-- PostgreSQL (configurable por variables de entorno)
-- Fallback SQLite para arranque local rapido
+- SQLite3 (modo desarrollo local)
 
 ## Modulos implementados
 
@@ -34,25 +33,21 @@ Estado actual: fase inicial implementada con Django + DRF + JWT + dominio multi-
 
 Usa `.env.example` como referencia.
 
-Si defines `POSTGRES_DB`, la app usara PostgreSQL.
-Si no, usara SQLite local.
-
 ## Instalacion local
 
-1. Crear/activar entorno virtual
-2. Instalar dependencias
+1. Instalar dependencias
 
 ```bash
 pip install -r requirements.txt
 ```
 
-3. Ejecutar migraciones
+2. Ejecutar migraciones
 
 ```bash
 python manage.py migrate
 ```
 
-4. Levantar servidor
+3. Levantar servidor
 
 ```bash
 python manage.py runserver
@@ -156,6 +151,12 @@ Webhook WhatsApp (Meta):
 - Eventos: `POST /api/v1/notifications/webhooks/whatsapp/`
 	- Reconciliacion por `provider_message_id` en outbox
 	- Estados soportados: `sent`, `delivered`, `read`, `failed`, `undelivered`
+
+Webhook Telegram:
+
+- Eventos: `POST /api/v1/notifications/webhooks/telegram/`
+	- Si configuras `TELEGRAM_WEBHOOK_SECRET_TOKEN`, enviar header `X-Telegram-Bot-Api-Secret-Token`
+	- Vincula `telegram_chat_id` automaticamente en `Employee` cuando el `telegram_username` coincide
 
 ## Celery Beat (siguiente paso aplicado)
 
